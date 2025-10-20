@@ -1,0 +1,7 @@
+torch
+torchvision
+timm
+albumentations
+scikit-learn
+matplotlib
+umap-learn

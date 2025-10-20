@@ -1,0 +1,18 @@
+# === Data & models (do not commit) ===
+ISIC2020/
+checkpoints/
+*.pt
+*.pth
+
+# === Runs & logs ===
+runs/
+*.log
+
+# === Python cache ===
+__pycache__/
+*.pyc
+
+# === OS/editor junk ===
+.DS_Store
+.vscode/
+.idea/

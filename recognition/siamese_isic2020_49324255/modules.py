@@ -20,17 +20,16 @@ def build_backbone(name="efficientnet_b0"):
         backbone: nn.Module without classifier head
         feature_dim: int, dimension of backbone output features
     """
-    # Load pretrained model
+    # Load pretrained model without classification head
     model = timm.create_model(name, pretrained=True, num_classes=0)
     
-    # Get feature dimension
+    # Get feature dimension using timm's standardized interface
     if hasattr(model, 'num_features'):
         feature_dim = model.num_features
-    elif hasattr(model, 'feature_info'):
-        feature_dim = model.feature_info[-1]['num_chs']
     else:
-        # Fallback: pass dummy input
+        # Fallback: infer from forward pass
         with torch.no_grad():
+            model.eval()
             dummy = torch.randn(1, 3, 224, 224)
             out = model(dummy)
             feature_dim = out.shape[1]
@@ -64,12 +63,26 @@ class EmbeddingNet(nn.Module):
             for param in self.backbone.parameters():
                 param.requires_grad = False
         
-        # Projection head: BN -> ReLU -> Linear
+        # Projection head: BN -> ReLU -> Linear(out_dim)
         self.projection = nn.Sequential(
             nn.BatchNorm1d(feature_dim),
             nn.ReLU(inplace=True),
             nn.Linear(feature_dim, out_dim)
         )
+        
+        # Initialize projection head weights
+        self._init_projection_weights()
+    
+    def _init_projection_weights(self):
+        """Initialize weights for projection head."""
+        for m in self.projection.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.BatchNorm1d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
         
     def forward(self, x):
         """
@@ -87,7 +100,7 @@ class EmbeddingNet(nn.Module):
         # Project to embedding space
         z = self.projection(features)
         
-        # L2 normalize
+        # L2 normalize: z = z / ||z||
         z = F.normalize(z, p=2, dim=1)
         
         return z
@@ -99,9 +112,8 @@ class EmbeddingNet(nn.Module):
     
     def unfreeze_last_block(self):
         """Unfreeze only the last block of backbone for gradual unfreezing."""
-        # This is backbone-specific; here's a generic approach
+        # Generic approach: unfreeze last 25% of parameters
         all_params = list(self.backbone.parameters())
-        # Unfreeze last 25% of parameters
         num_to_unfreeze = max(1, len(all_params) // 4)
         for param in all_params[-num_to_unfreeze:]:
             param.requires_grad = True
@@ -133,17 +145,22 @@ class SiameseHead(nn.Module):
             distance: distance values (B,) - used for contrastive loss
         """
         if self.metric == "cosine":
-            # Cosine similarity (already L2 normalized in EmbeddingNet)
+            # Cosine similarity (embeddings already L2 normalized in EmbeddingNet)
+            # similarity = <z1, z2> = sum(z1 * z2)
             similarity = (z1 * z2).sum(dim=1)
-            # Distance for contrastive loss: 1 - cosine_sim
+            
+            # Distance for contrastive loss: d = 1 - cosine_similarity
             distance = 1.0 - similarity
+            
         elif self.metric == "euclidean":
-            # Euclidean distance
+            # Euclidean distance: ||z1 - z2||_2
             distance = torch.sqrt(((z1 - z2) ** 2).sum(dim=1) + 1e-8)
+            
             # Similarity (inverse of distance)
             similarity = 1.0 / (1.0 + distance)
+            
         else:
-            raise ValueError(f"Unknown metric: {self.metric}")
+            raise ValueError(f"Unknown metric: {self.metric}. Choose 'cosine' or 'euclidean'.")
         
         return similarity, distance
 

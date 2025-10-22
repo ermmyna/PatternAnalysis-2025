@@ -168,14 +168,21 @@ class SiameseHead(nn.Module):
 class ContrastiveLoss(nn.Module):
     """
     Contrastive loss for Siamese networks.
-    L = y * d^2 + (1 - y) * max(0, margin - d)^2
-    where y=1 for same class (positive pairs), y=0 for different class (negative pairs)
+    
+    Loss formula:
+        L = y * d^2 + (1 - y) * max(0, margin - d)^2
+    
+    where:
+        - d = distance between embeddings (cosine distance: d = 1 - cosine_similarity)
+        - y = 1 for same-class pairs (positive)
+        - y = 0 for different-class pairs (negative)
+        - margin = threshold for negative pairs
     """
     
     def __init__(self, margin=1.0):
         """
         Args:
-            margin: margin for negative pairs
+            margin: margin for negative pairs (default: 1.0)
         """
         super(ContrastiveLoss, self).__init__()
         self.margin = margin
@@ -185,23 +192,26 @@ class ContrastiveLoss(nn.Module):
         Compute contrastive loss.
         
         Args:
-            distance: distances between embedding pairs (B,)
+            distance: distances between embedding pairs (B,) 
+                     For cosine: d = 1 - cosine_similarity
             target: binary labels (B,) - 1 for same class, 0 for different class
         
         Returns:
             loss: scalar loss value
-            stats: dict with 'pos_mean_d' and 'neg_mean_d'
+            stats: dict with 'pos_mean_d' and 'neg_mean_d' (mean distances)
         """
-        # Positive pairs (same class): minimize distance
+        # Positive pairs (y=1, same class): minimize distance
+        # Loss = d^2
         pos_loss = target * (distance ** 2)
         
-        # Negative pairs (different class): maximize distance up to margin
-        neg_loss = (1 - target) * torch.clamp(self.margin - distance, min=0) ** 2
+        # Negative pairs (y=0, different class): maximize distance up to margin
+        # Loss = max(0, margin - d)^2
+        neg_loss = (1 - target) * torch.clamp(self.margin - distance, min=0.0) ** 2
         
-        # Total loss
+        # Total loss (mean over batch)
         loss = (pos_loss + neg_loss).mean()
         
-        # Compute statistics
+        # Compute statistics for monitoring
         pos_mask = target == 1
         neg_mask = target == 0
         

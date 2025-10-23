@@ -7,11 +7,29 @@ import random
 from pathlib import Path
 import pandas as pd
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageFile
 import torch
+import time
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 
+ImageFile.LOAD_TRUNCATED_IMAGES = True
+
+
+def _load_rgb(path, retries=3, delay=0.07):
+    """
+    Try to open an image a few times (Drive can be flaky).
+    Returns a PIL Image on success, raises last error otherwise.
+    """
+    last_err = None
+    for _ in range(retries):
+        try:
+            with Image.open(path) as im:
+                return im.convert("RGB")
+        except Exception as e:
+            last_err = e
+            time.sleep(delay)
+    raise last_err
 
 class ISICPairDataset(Dataset):
     """
@@ -140,15 +158,24 @@ class ISICPairDataset(Dataset):
         
         # Load and transform both images
         try:
-            img1 = Image.open(img1_path).convert('RGB')
-            img2 = Image.open(img2_path).convert('RGB')
-        except Exception as e:
-            raise RuntimeError(f"Error loading images:\n  {img1_path}\n  {img2_path}\nError: {e}")
-        
-        img1 = self.transform(img1)
-        img2 = self.transform(img2)
-        
-        return img1, img2, same
+            img1 = _load_rgb(img1_path)
+            img2 = _load_rgb(img2_path)
+        except Exception:
+            # Soft-skip: pick another random index instead of crashing the worker
+            new_idx = random.randrange(0, len(self))
+            return self.__getitem__(new_idx)
+
+        # Apply transforms
+        if self.transform is not None:
+            img1 = self.transform(img1)
+            img2 = self.transform(img2)
+
+        # same: 1 for positive (same label), 0 for negative (different)
+        same_tensor = torch.tensor(same, dtype=torch.float32)
+
+        return img1, img2, same_tensor
+
+
 
 
 def make_dataloader(csv_path, batch_size=64, img_size=224, augment=True, 
@@ -180,8 +207,10 @@ def make_dataloader(csv_path, batch_size=64, img_size=224, augment=True,
         batch_size=batch_size,
         shuffle=shuffle,
         num_workers=num_workers,
-        pin_memory=True,
+        pin_memory=torch.cuda.is_available(),
         drop_last=False
     )
     
     return dataloader
+
+

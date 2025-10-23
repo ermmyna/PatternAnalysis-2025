@@ -315,7 +315,7 @@ def main():
         print(f"Run with --epochs > 0 to train and evaluate.")
         return
     
-    ckpt = torch.load(ckpt_path)
+    ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
     embedding_net.load_state_dict(ckpt['embedding_net'])
     probe.load_state_dict(ckpt['probe'])
     best_thresh = ckpt.get('best_threshold', 0.5)  # Default to 0.5 if not found

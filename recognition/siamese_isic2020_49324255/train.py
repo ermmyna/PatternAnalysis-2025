@@ -234,18 +234,7 @@ def main():
     siamese_head = SiameseHead(metric='cosine').to(device)
     contrastive_loss = ContrastiveLoss(margin=args.margin)
     probe = LinearProbe(args.embed_dim, 2).to(device)
-
-    # compute class weights from the TRAIN split (0=benign, 1=melanoma)
-    train_df = train_loader.dataset.df
-    n_pos = int(train_df['label'].sum())
-    n_all = int(len(train_df))
-    n_neg = max(n_all - n_pos, 1)
-    w_pos = n_neg / max(n_pos, 1)  # >1 boosts the minority class
-    class_weights = torch.tensor([1.0, w_pos], dtype=torch.float32, device=device)
-
-    probe_criterion = nn.CrossEntropyLoss(weight=class_weights)
-    print(f"[Probe CE weights] neg=1.00, pos={w_pos:.2f} (pos={n_pos}, neg={n_neg})")
-
+    probe_criterion = nn.CrossEntropyLoss()
     
     # Optimizers
     opt_embed = optim.AdamW(embedding_net.parameters(), lr=args.lr, weight_decay=args.weight_decay)
@@ -319,14 +308,17 @@ def main():
     # Save curves
     save_learning_curves(train_losses, val_metrics_hist, os.path.join(args.out_dir, 'figures', 'learning_curves.pdf'))
     
-    # Load best and test
-    ckpt = torch.load(
-        os.path.join(args.out_dir, 'checkpoints', 'best.pt'),
-        map_location='cpu', weights_only=False
-    )
+    # Load best checkpoint (handle case where no training occurred)
+    ckpt_path = os.path.join(args.out_dir, 'checkpoints', 'best.pt')
+    if not os.path.exists(ckpt_path):
+        print(f"\nNo checkpoint found (epochs={args.epochs}). Skipping test evaluation.")
+        print(f"Run with --epochs > 0 to train and evaluate.")
+        return
+    
+    ckpt = torch.load(ckpt_path)
     embedding_net.load_state_dict(ckpt['embedding_net'])
     probe.load_state_dict(ckpt['probe'])
-    best_thresh = ckpt['best_threshold']
+    best_thresh = ckpt.get('best_threshold', 0.5)  # Default to 0.5 if not found
     
     print(f"\nTesting with threshold={best_thresh:.3f}...")
     test_metrics, test_embs, test_labels, test_probs, test_preds = evaluate(embedding_net, probe, test_loader.dataset, device, best_thresh)

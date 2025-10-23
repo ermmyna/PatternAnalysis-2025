@@ -52,7 +52,7 @@ class SingleImageDataset(Dataset):
 def choose_threshold(y_true, y_prob, metric='f1'):
     """
     Find optimal threshold by sweeping 0.01 to 0.99.
-    Returns: (best_threshold, {f1, precision, recall})
+    Returns: (best_threshold, {'best_f1', 'precision_at_best', 'recall_at_best'})
     """
     thresholds = np.arange(0.01, 1.0, 0.01)
     best_score = 0.0
@@ -70,7 +70,11 @@ def choose_threshold(y_true, y_prob, metric='f1'):
         if score > best_score:
             best_score = score
             best_threshold = thresh
-            best_metrics = {'f1': f1, 'precision': prec, 'recall': rec}
+            best_metrics = {
+                'best_f1': f1,
+                'precision_at_best': prec,
+                'recall_at_best': rec
+            }
     
     return best_threshold, best_metrics
 

@@ -5,6 +5,7 @@ Training script for Siamese Network on ISIC 2020
 import argparse
 import os
 import time
+import json
 import numpy as np
 import torch
 import torch.nn as nn
@@ -216,6 +217,8 @@ def main():
     parser.add_argument('--embed_dim', type=int, default=128)
     parser.add_argument('--margin', type=float, default=1.0)
     parser.add_argument('--unfreeze_after', type=int, default=0)
+    parser.add_argument('--auto_threshold', action='store_true', default=False,
+                       help='Auto-compute optimal threshold on validation when epochs=0')
     args = parser.parse_args()
     
     set_seed(args.seed)
@@ -314,6 +317,121 @@ def main():
     
     # Load best checkpoint (handle case where no training occurred)
     ckpt_path = os.path.join(args.out_dir, 'checkpoints', 'best.pt')
+    metrics_json_path = os.path.join(args.out_dir, 'metrics.json')
+    
+    # Check if we're in eval-only mode (epochs=0 with auto_threshold)
+    if args.epochs == 0 and args.auto_threshold:
+        print(f"\n{'='*70}")
+        print("EVAL-ONLY MODE: Auto-computing optimal threshold")
+        print(f"{'='*70}")
+        
+        # Try to load existing checkpoint
+        if not os.path.exists(ckpt_path):
+            print(f"ERROR: No checkpoint found at {ckpt_path}")
+            print("Train with --epochs > 0 first to create a checkpoint.")
+            return
+        
+        ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+        
+        # Handle both 'embedding_net' and 'model' keys
+        if 'embedding_net' in ckpt:
+            embedding_net.load_state_dict(ckpt['embedding_net'])
+            probe.load_state_dict(ckpt['probe'])
+        elif 'model' in ckpt:
+            embedding_net.load_state_dict(ckpt['model'])
+            probe.load_state_dict(ckpt.get('probe', probe.state_dict()))
+        else:
+            print("ERROR: Checkpoint must contain 'embedding_net' or 'model' key")
+            return
+        
+        # Try to get threshold from checkpoint or metrics.json
+        best_thresh = ckpt.get('best_threshold', None)
+        
+        if best_thresh is None and os.path.exists(metrics_json_path):
+            with open(metrics_json_path, 'r') as f:
+                existing_metrics = json.load(f)
+                best_thresh = existing_metrics.get('best_threshold', None)
+        
+        # If no threshold found, compute it on validation
+        if best_thresh is None:
+            print("\nNo threshold found in checkpoint or metrics.json")
+            print("Computing optimal threshold on validation set...")
+            
+            val_metrics, _, val_labels, val_probs, _ = evaluate(
+                embedding_net, probe, val_loader.dataset, device, threshold=0.5
+            )
+            
+            best_thresh, thresh_metrics = choose_threshold(val_labels, val_probs, 'f1')
+            
+            print(f"\nOptimal Threshold on Validation:")
+            print(f"  Threshold:    {best_thresh:.3f}")
+            print(f"  Best F1:      {thresh_metrics['best_f1']:.4f}")
+            print(f"  Precision:    {thresh_metrics['precision_at_best']:.4f}")
+            print(f"  Recall:       {thresh_metrics['recall_at_best']:.4f}")
+            print(f"  Val AUC:      {val_metrics['auc']:.4f}")
+            print(f"  Val AUCPR:    {val_metrics['aucpr']:.4f}")
+            
+            # Save validation PR curve
+            pr_val_path = os.path.join(args.out_dir, 'figures', 'pr_curve_val.pdf')
+            save_pr_curve(val_labels, val_probs, pr_val_path)
+            
+            # Update metrics.json with threshold info
+            metrics_to_save = {
+                'best_threshold': float(best_thresh),
+                'val_best_f1': float(thresh_metrics['best_f1']),
+                'val_precision_at_best': float(thresh_metrics['precision_at_best']),
+                'val_recall_at_best': float(thresh_metrics['recall_at_best']),
+                'val_auc': float(val_metrics['auc']),
+                'val_aucpr': float(val_metrics['aucpr'])
+            }
+        else:
+            print(f"\nUsing existing threshold: {best_thresh:.3f}")
+            metrics_to_save = {'best_threshold': float(best_thresh)}
+        
+        # Evaluate on test set with optimal threshold
+        print(f"\nEvaluating test set with threshold={best_thresh:.3f}...")
+        test_metrics, test_embs, test_labels, test_probs, test_preds = evaluate(
+            embedding_net, probe, test_loader.dataset, device, best_thresh
+        )
+        
+        print(f"\n{'='*70}")
+        print("TEST RESULTS (with optimal threshold):")
+        print(f"{'='*70}")
+        print(f"Threshold:  {best_thresh:.3f}")
+        print(f"AUC:        {test_metrics['auc']:.4f}")
+        print(f"AUCPR:      {test_metrics['aucpr']:.4f}")
+        print(f"Accuracy:   {test_metrics['accuracy']:.4f}")
+        print(f"F1:         {test_metrics['f1']:.4f}")
+        print(f"{'='*70}")
+        
+        # Save test PR curve
+        pr_test_path = os.path.join(args.out_dir, 'figures', 'pr_curve_test.pdf')
+        save_pr_curve(test_labels, test_probs, pr_test_path)
+        
+        # Save test visualizations
+        save_roc_curve(test_labels, test_probs, os.path.join(args.out_dir, 'figures', 'roc_curve.pdf'))
+        save_confusion_matrix(test_labels, test_preds, os.path.join(args.out_dir, 'figures', 'confusion_matrix.pdf'))
+        
+        if len(test_embs) > 2000:
+            idx = np.random.choice(len(test_embs), 2000, replace=False)
+            plot_embeddings_umap(test_embs[idx], test_labels[idx], os.path.join(args.out_dir, 'figures', 'embeddings_umap.pdf'))
+        else:
+            plot_embeddings_umap(test_embs, test_labels, os.path.join(args.out_dir, 'figures', 'embeddings_umap.pdf'))
+        
+        # Update metrics with test results
+        metrics_to_save.update({
+            'test_auc': float(test_metrics['auc']),
+            'test_aucpr': float(test_metrics['aucpr']),
+            'test_accuracy': float(test_metrics['accuracy']),
+            'test_f1_at_best_thr': float(test_metrics['f1']),
+            'hyperparameters': vars(args)
+        })
+        
+        save_metrics_json(metrics_to_save, metrics_json_path)
+        print(f"\n✓ Eval-only complete! Results in {args.out_dir}\n")
+        return
+    
+    # Normal training path (epochs > 0)
     if not os.path.exists(ckpt_path):
         print(f"\nNo checkpoint found (epochs={args.epochs}). Skipping test evaluation.")
         print(f"Run with --epochs > 0 to train and evaluate.")

@@ -452,7 +452,7 @@ def main():
     
     # Save visualizations
     save_roc_curve(test_labels, test_probs, os.path.join(args.out_dir, 'figures', 'roc_curve.pdf'))
-    save_pr_curve(test_labels, test_probs, os.path.join(args.out_dir, 'figures', 'pr_curve.pdf'))
+    save_pr_curve(test_labels, test_probs, os.path.join(args.out_dir, 'figures', 'pr_curve_test.pdf'))
     save_confusion_matrix(test_labels, test_preds, os.path.join(args.out_dir, 'figures', 'confusion_matrix.pdf'))
     
     if len(test_embs) > 2000:
@@ -469,7 +469,7 @@ def main():
         'test_auc': float(test_metrics['auc']),
         'test_aucpr': float(test_metrics['aucpr']),
         'test_accuracy': float(test_metrics['accuracy']),
-        'test_f1': float(test_metrics['f1']),
+        'test_f1_at_best_thr': float(test_metrics['f1']),
         'training_time_minutes': float((time.time() - start_time) / 60),
         'hyperparameters': vars(args)
     }, os.path.join(args.out_dir, 'metrics.json'))

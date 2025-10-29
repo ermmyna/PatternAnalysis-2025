@@ -284,7 +284,7 @@ def main():
         print(f"EPOCH {epoch}/{args.epochs}")
         print(f"Train: Loss={loss:.4f}, ProbeLoss={probe_loss:.4f}, PosD={pos_d:.3f}, NegD={neg_d:.3f}")
         print(f"Val (0.5): AUC={val_metrics['auc']:.4f}, AUCPR={val_metrics['aucpr']:.4f}, Acc={val_metrics['accuracy']:.4f}, F1={val_metrics['f1']:.4f}")
-        print(f"Optimal thresh={thresh:.3f}: F1={thresh_metrics['f1']:.4f}, Prec={thresh_metrics['precision']:.4f}, Rec={thresh_metrics['recall']:.4f}")
+        print(f"Optimal thresh={thresh:.3f}: F1={thresh_metrics['best_f1']:.4f}, Prec={thresh_metrics['precision_at_best']:.4f}, Rec={thresh_metrics['recall_at_best']:.4f}")
         
         # Save best
         if val_metrics['auc'] > best_auc:

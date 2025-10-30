@@ -1,6 +1,6 @@
 # Siamese Network for ISIC 2020 Melanoma Classification
 
-**Student:** Ermmyna Roselee Shah (s49324255)  
+**Student:** Ermmyna Roselee Shah (49324255)  
 **Repository:** PatternAnalysis-2025  
 **Branch:** topic9-siamese  
 **Project Folder:** `recognition/siamese_isic2020_49324255/`
@@ -26,9 +26,9 @@ This project implements a Siamese neural network for binary melanoma classificat
 
 **CSV Columns:**
 - `image_path`: relative path to image
-- `label`: binary target (0=benign, 1=malignant)
+- `target`: binary target (0=benign, 1=malignant)
 - `patient_id`: patient identifier
-- `lesion_id`: lesion identifier
+- `lesion_id`: lesion identifier (optional, unused by pipeline)
 - `image_name`: image filename
 
 **Note:** Large image data is not committed to Git. Users must download the dataset and specify `--images_root` pointing to the image directory.
@@ -40,12 +40,14 @@ This project implements a Siamese neural network for binary melanoma classificat
 ### Architecture
 ```
 Image 1 (224×224×3) ──┐
-                       ├──> EfficientNet-B0 (frozen) ──> Projection Head ──> L2 Norm ──> Embedding 1 (128D)
-Image 2 (224×224×3) ──┘                                (BN→ReLU→Linear)                                    │
-                                                                                                            ├──> Cosine Distance ──> Contrastive Loss
-                                                      Embedding 2 (128D) ────────────────────────────────────┘
-                                                              │
-                                                              └──> Linear Probe (128→2) ──> Cross-Entropy + Class Weights
+                      ├──> EfficientNet-B0 (frozen) ──> Projection Head ──> L2 Norm ──> Embedding 1 (128D)
+Image 2 (224×224×3) ──┘                                  (BN→ReLU→Linear)
+                                                                │
+                                                                ├──> Cosine Distance ──> Contrastive Loss
+                                                                │
+                                                         Embedding 2 (128D)
+                                                                │
+                                                                └──> Linear Probe (128→2) ──> Cross-Entropy + Class Weights
 ```
 
 ### Components
@@ -99,8 +101,6 @@ Pillow>=9.5.0
 umap-learn>=0.5.3
 tqdm
 ```
-
-**Optional:** Kaggle API for dataset download (requires `kaggle.json` token in `/root/.kaggle/`)
 
 ---
 
@@ -175,6 +175,22 @@ print(f"✓ Batch shapes: {img1.shape}, {img2.shape}, {same.shape}")
 print(f"  Pair labels: {same.numpy()}")
 ```
 
+### Test Driver Scripts (One Command)
+
+For convenience, use the provided shell scripts:
+
+**Eval-only (recompute threshold):**
+```bash
+bash recognition/siamese_isic2020_49324255/scripts/eval.sh
+```
+
+**Training (6 epochs):**
+```bash
+bash recognition/siamese_isic2020_49324255/scripts/train.sh
+```
+
+These scripts use environment variables (`REPO`, `TRAIN_CSV`, etc.) with sensible defaults. Override as needed.
+
 ### Eval-Only Run (Recompute Threshold)
 ```bash
 python recognition/siamese_isic2020_49324255/train.py \
@@ -189,6 +205,8 @@ python recognition/siamese_isic2020_49324255/train.py \
   --num_workers 2 \
   --auto_threshold
 ```
+
+**Note:** If `$OUT_DIR/checkpoints/best.pt` does not exist, the script exits with an error; to reproduce the reported metrics, first run a short training (6–8 epochs) to produce `best.pt`, or place a compatible checkpoint at that path. Checkpoints are not committed to git.
 
 **Outputs:**
 - `$OUT_DIR/metrics.json` (test AUC, AUCPR, accuracy, F1, best_threshold)
@@ -245,7 +263,7 @@ python recognition/siamese_isic2020_49324255/predict.py \
 | **Accuracy** | **0.952** | High but inflated by class imbalance |
 | **F1 @ threshold=0.23** | **0.234** | Optimal threshold from validation |
 
-**Interpretation:** The optimal threshold (0.23) is significantly lower than the default (0.5) due to severe class imbalance (1.7% malignant). This threshold balances precision and recall for the minority class, improving F1 from near-zero (at 0.5) to 0.234. ROC-AUC (0.837) demonstrates strong ranking ability, while AUCPR (0.139) more accurately reflects performance under extreme imbalance.
+**Interpretation:** The optimal threshold (0.23) is significantly lower than the default (0.5) due to severe class imbalance (1.7% malignant). This threshold balances precision and recall for the minority class, improving F1 from near-zero (at 0.5) to 0.234. ROC-AUC (0.837) demonstrates strong ranking ability, while AUCPR (0.139) reflects performance under extreme imbalance—approximately 6× the random-guess baseline AUCPR of ~0.023 (test prevalence).
 
 ### Visual Results
 
@@ -345,7 +363,13 @@ Apply the same preprocessing as training for consistent results.
 
 ---
 
-## 10. Academic Integrity / AI-Usage Statement
+## 10. Ethical & Data-Use Considerations
+
+ISIC 2020 images are de-identified and released for research purposes under appropriate licenses. This model is intended for research only and not for clinical use. The dataset may contain site-specific or device-specific biases that could affect generalization. Prospective validation on diverse populations and clinical settings is required before any clinical deployment.
+
+---
+
+## 11. Academic Integrity / AI-Usage Statement
 
 Generative AI (Claude 3.5 Sonnet) was used for:
 - Coding assistance (PyTorch boilerplate, error handling, refactoring)
@@ -356,7 +380,7 @@ All experimental design, hyperparameter selection, threshold optimization, data 
 
 ---
 
-## 11. CLI Flags Reference (Appendix)
+## 12. CLI Flags Reference (Appendix)
 
 ### train.py Flags
 
@@ -366,7 +390,7 @@ All experimental design, hyperparameter selection, threshold optimization, data 
 | `--val_csv` | `data/val.csv` | Path to validation CSV |
 | `--test_csv` | `data/test.csv` | Path to test CSV |
 | `--images_root` | `ISIC2020/train` | Root directory containing images |
-| `--out_dir` | `runs/exp1` | Output directory for checkpoints and figures |
+| `--out_dir` | `recognition/siamese_isic2020_49324255/runs/exp1` | Output directory for checkpoints and figures |
 | `--epochs` | `15` | Number of training epochs (0 for eval-only) |
 | `--batch_size` | `64` | Batch size for pair dataloader |
 | `--img_size` | `224` | Image resize dimension (square) |
@@ -378,17 +402,17 @@ All experimental design, hyperparameter selection, threshold optimization, data 
 | `--margin` | `1.0` | Contrastive loss margin |
 | `--unfreeze_after` | `0` | Unfreeze backbone after N epochs (0=never) |
 | `--pos_ratio` | `0.5` | Probability of positive pairs |
-| `--auto_threshold` | `False` | Auto-compute optimal threshold (epochs=0 only) |
+| `--auto_threshold` | `False` | Auto-compute optimal threshold (flag, no value) |
 | `--seed` | `42` | Random seed for reproducibility |
 
 ### predict.py Flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--csv` | Required | Path to CSV for inference |
-| `--images_root` | Required | Root directory containing images |
-| `--checkpoint` | Required | Path to trained checkpoint (.pt) |
-| `--out_dir` | Required | Output directory for predictions.csv |
+| `--csv` | (required) | Path to CSV for inference |
+| `--images_root` | (required) | Root directory containing images |
+| `--checkpoint` | (required) | Path to trained checkpoint (.pt) |
+| `--out_dir` | (required) | Output directory for predictions.csv |
 | `--img_size` | `224` | Image resize dimension |
 | `--max_samples` | `100` | Maximum samples to process |
 
@@ -401,6 +425,9 @@ recognition/siamese_isic2020_49324255/
 ├── train.py                # Training pipeline with dual optimization
 ├── predict.py              # Inference script
 ├── README.md               # This file
+├── scripts/
+│   ├── eval.sh             # Eval-only driver script
+│   └── train.sh            # Training driver script
 └── results/                # Not committed (user-generated)
     ├── checkpoints/
     │   └── best.pt
@@ -411,13 +438,21 @@ recognition/siamese_isic2020_49324255/
     │   ├── confusion_matrix.pdf
     │   ├── learning_curves.pdf
     │   └── embeddings_umap.pdf
-    ├── metrics.json
-    └── predictions.csv
+    └── metrics.json
 ```
+---
+
+## 13. References
+
+- **EfficientNet:** Tan, M., & Le, Q. V. (2019). EfficientNet: Rethinking model scaling for convolutional neural networks. ICML.
+- **Contrastive Loss / Siamese Networks:** Hadsell, R., Chopra, S., & LeCun, Y. (2006). Dimensionality reduction by learning an invariant mapping. CVPR.
+- **UMAP:** McInnes, L., Healy, J., & Melville, J. (2018). UMAP: Uniform manifold approximation and projection for dimension reduction. arXiv:1802.03426.
+- **ISIC Dataset:** Tschandl, P., Rosendahl, C., & Kittler, H. (2018). The HAM10000 dataset. Scientific Data.
+- **ISIC 2020 Challenge:** https://challenge2020.isic-archive.com/
 
 ---
 
-## 12. Submission Notes (for Markers)
+## 14. Submission Notes (for Markers)
 
 **Repository:** https://github.com/ermmyna/PatternAnalysis-2025  
 **Branch:** `topic9-siamese`  
@@ -431,7 +466,8 @@ recognition/siamese_isic2020_49324255/
 
 **To Verify Results:**
 1. Download dataset from Kaggle link (Section 2)
-2. Run eval-only command (Section 5) with provided checkpoint
-3. Compare `metrics.json` with reported values (Section 6)
+2. Run training command (Section 5) or use provided script: `bash scripts/train.sh`
+3. Run eval-only command or use: `bash scripts/eval.sh`
+4. Compare `metrics.json` with reported values (Section 6)
 
 **Training Time:** ~27 minutes (6 epochs with early stopping) on Colab T4 GPU

@@ -217,6 +217,8 @@ def main():
     parser.add_argument('--embed_dim', type=int, default=128)
     parser.add_argument('--margin', type=float, default=1.0)
     parser.add_argument('--unfreeze_after', type=int, default=0)
+    parser.add_argument('--pos_ratio', type=float, default=0.5,
+                       help='Probability of positive pairs (default 0.5 for balanced)')
     parser.add_argument('--auto_threshold', action='store_true', default=False,
                        help='Auto-compute optimal threshold on validation when epochs=0')
     args = parser.parse_args()
@@ -227,12 +229,16 @@ def main():
     
     print(f"\n{'='*70}")
     print(f"Device: {device} | Backbone: {args.backbone} | Embed dim: {args.embed_dim}")
+    print(f"Pos ratio: {args.pos_ratio}")
     print(f"{'='*70}")
     
-    # Data loaders
-    train_loader = make_dataloader(args.train_csv, args.batch_size, args.img_size, True, args.images_root, args.num_workers)
-    val_loader = make_dataloader(args.val_csv, args.batch_size, args.img_size, False, args.images_root, args.num_workers)
-    test_loader = make_dataloader(args.test_csv, args.batch_size, args.img_size, False, args.images_root, args.num_workers)
+    # Data loaders with pos_ratio
+    train_loader = make_dataloader(args.train_csv, args.batch_size, args.img_size, True, 
+                                   args.images_root, args.num_workers, pos_ratio=args.pos_ratio)
+    val_loader = make_dataloader(args.val_csv, args.batch_size, args.img_size, False, 
+                                 args.images_root, args.num_workers, pos_ratio=args.pos_ratio)
+    test_loader = make_dataloader(args.test_csv, args.batch_size, args.img_size, False, 
+                                  args.images_root, args.num_workers, pos_ratio=args.pos_ratio)
     
     print(f"\nTrain: {len(train_loader.dataset)}, Val: {len(val_loader.dataset)}, Test: {len(test_loader.dataset)}")
     
@@ -247,6 +253,95 @@ def main():
     opt_embed = optim.AdamW(embedding_net.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     opt_probe = optim.AdamW(probe.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     scheduler = CosineAnnealingLR(opt_embed, T_max=args.epochs)
+    
+    # Check for eval-only mode
+    ckpt_path = os.path.join(args.out_dir, 'checkpoints', 'best.pt')
+    metrics_json_path = os.path.join(args.out_dir, 'metrics.json')
+    
+    if args.epochs == 0 and args.auto_threshold:
+        print(f"\n{'='*70}")
+        print("EVAL-ONLY MODE: Auto-computing optimal threshold")
+        print(f"{'='*70}")
+        
+        if not os.path.exists(ckpt_path):
+            print(f"ERROR: No checkpoint found at {ckpt_path}")
+            return
+        
+        ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+        
+        # Handle both key names
+        if 'embedding_net' in ckpt:
+            embedding_net.load_state_dict(ckpt['embedding_net'])
+            probe.load_state_dict(ckpt['probe'])
+        elif 'model' in ckpt:
+            embedding_net.load_state_dict(ckpt['model'])
+            probe.load_state_dict(ckpt.get('probe', probe.state_dict()))
+        else:
+            print("ERROR: Checkpoint must contain 'embedding_net' or 'model' key")
+            return
+        
+        # Get or compute threshold
+        best_thresh = ckpt.get('best_threshold', None)
+        if best_thresh is None and os.path.exists(metrics_json_path):
+            with open(metrics_json_path, 'r') as f:
+                best_thresh = json.load(f).get('best_threshold', None)
+        
+        if best_thresh is None:
+            print("\nComputing optimal threshold on validation...")
+            val_metrics, _, val_labels, val_probs, _ = evaluate(embedding_net, probe, val_loader.dataset, device, 0.5)
+            best_thresh, thresh_metrics = choose_threshold(val_labels, val_probs, 'f1')
+            
+            print(f"\nOptimal Threshold: {best_thresh:.3f}")
+            print(f"  F1:        {thresh_metrics['best_f1']:.4f}")
+            print(f"  Precision: {thresh_metrics['precision_at_best']:.4f}")
+            print(f"  Recall:    {thresh_metrics['recall_at_best']:.4f}")
+            
+            save_pr_curve(val_labels, val_probs, os.path.join(args.out_dir, 'figures', 'pr_curve_val.pdf'))
+            
+            metrics_to_save = {
+                'best_threshold': float(best_thresh),
+                'val_best_f1': float(thresh_metrics['best_f1']),
+                'val_precision_at_best': float(thresh_metrics['precision_at_best']),
+                'val_recall_at_best': float(thresh_metrics['recall_at_best']),
+                'val_auc': float(val_metrics['auc']),
+                'val_aucpr': float(val_metrics['aucpr'])
+            }
+        else:
+            print(f"\nUsing existing threshold: {best_thresh:.3f}")
+            metrics_to_save = {'best_threshold': float(best_thresh)}
+        
+        # Test evaluation
+        test_metrics, test_embs, test_labels, test_probs, test_preds = evaluate(
+            embedding_net, probe, test_loader.dataset, device, best_thresh
+        )
+        
+        print(f"\n{'='*70}")
+        print("TEST RESULTS:")
+        print(f"AUC={test_metrics['auc']:.4f}, AUCPR={test_metrics['aucpr']:.4f}, "
+              f"Acc={test_metrics['accuracy']:.4f}, F1={test_metrics['f1']:.4f}")
+        print(f"{'='*70}")
+        
+        save_pr_curve(test_labels, test_probs, os.path.join(args.out_dir, 'figures', 'pr_curve_test.pdf'))
+        save_roc_curve(test_labels, test_probs, os.path.join(args.out_dir, 'figures', 'roc_curve.pdf'))
+        save_confusion_matrix(test_labels, test_preds, os.path.join(args.out_dir, 'figures', 'confusion_matrix.pdf'))
+        
+        if len(test_embs) > 2000:
+            idx = np.random.choice(len(test_embs), 2000, replace=False)
+            plot_embeddings_umap(test_embs[idx], test_labels[idx], os.path.join(args.out_dir, 'figures', 'embeddings_umap.pdf'))
+        else:
+            plot_embeddings_umap(test_embs, test_labels, os.path.join(args.out_dir, 'figures', 'embeddings_umap.pdf'))
+        
+        metrics_to_save.update({
+            'test_auc': float(test_metrics['auc']),
+            'test_aucpr': float(test_metrics['aucpr']),
+            'test_accuracy': float(test_metrics['accuracy']),
+            'test_f1_at_best_thr': float(test_metrics['f1']),
+            'hyperparameters': vars(args)
+        })
+        
+        save_metrics_json(metrics_to_save, metrics_json_path)
+        print(f"\n✓ Eval-only complete!\n")
+        return
     
     # Training
     print(f"\n{'='*70}\nSTARTING TRAINING\n{'='*70}")
@@ -298,7 +393,7 @@ def main():
                 'best_val_auc': best_auc,
                 'best_threshold': best_thresh,
                 'args': vars(args)
-            }, os.path.join(args.out_dir, 'checkpoints', 'best.pt'))
+            }, ckpt_path)
             print(f"✓ Best model saved! AUC={best_auc:.4f}, Thresh={best_thresh:.3f}")
         else:
             patience_counter += 1
@@ -315,132 +410,15 @@ def main():
     # Save curves
     save_learning_curves(train_losses, val_metrics_hist, os.path.join(args.out_dir, 'figures', 'learning_curves.pdf'))
     
-    # Load best checkpoint (handle case where no training occurred)
-    ckpt_path = os.path.join(args.out_dir, 'checkpoints', 'best.pt')
-    metrics_json_path = os.path.join(args.out_dir, 'metrics.json')
-    
-    # Check if we're in eval-only mode (epochs=0 with auto_threshold)
-    if args.epochs == 0 and args.auto_threshold:
-        print(f"\n{'='*70}")
-        print("EVAL-ONLY MODE: Auto-computing optimal threshold")
-        print(f"{'='*70}")
-        
-        # Try to load existing checkpoint
-        if not os.path.exists(ckpt_path):
-            print(f"ERROR: No checkpoint found at {ckpt_path}")
-            print("Train with --epochs > 0 first to create a checkpoint.")
-            return
-        
-        ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
-        
-        # Handle both 'embedding_net' and 'model' keys
-        if 'embedding_net' in ckpt:
-            embedding_net.load_state_dict(ckpt['embedding_net'])
-            probe.load_state_dict(ckpt['probe'])
-        elif 'model' in ckpt:
-            embedding_net.load_state_dict(ckpt['model'])
-            probe.load_state_dict(ckpt.get('probe', probe.state_dict()))
-        else:
-            print("ERROR: Checkpoint must contain 'embedding_net' or 'model' key")
-            return
-        
-        # Try to get threshold from checkpoint or metrics.json
-        best_thresh = ckpt.get('best_threshold', None)
-        
-        if best_thresh is None and os.path.exists(metrics_json_path):
-            with open(metrics_json_path, 'r') as f:
-                existing_metrics = json.load(f)
-                best_thresh = existing_metrics.get('best_threshold', None)
-        
-        # If no threshold found, compute it on validation
-        if best_thresh is None:
-            print("\nNo threshold found in checkpoint or metrics.json")
-            print("Computing optimal threshold on validation set...")
-            
-            val_metrics, _, val_labels, val_probs, _ = evaluate(
-                embedding_net, probe, val_loader.dataset, device, threshold=0.5
-            )
-            
-            best_thresh, thresh_metrics = choose_threshold(val_labels, val_probs, 'f1')
-            
-            print(f"\nOptimal Threshold on Validation:")
-            print(f"  Threshold:    {best_thresh:.3f}")
-            print(f"  Best F1:      {thresh_metrics['best_f1']:.4f}")
-            print(f"  Precision:    {thresh_metrics['precision_at_best']:.4f}")
-            print(f"  Recall:       {thresh_metrics['recall_at_best']:.4f}")
-            print(f"  Val AUC:      {val_metrics['auc']:.4f}")
-            print(f"  Val AUCPR:    {val_metrics['aucpr']:.4f}")
-            
-            # Save validation PR curve
-            pr_val_path = os.path.join(args.out_dir, 'figures', 'pr_curve_val.pdf')
-            save_pr_curve(val_labels, val_probs, pr_val_path)
-            
-            # Update metrics.json with threshold info
-            metrics_to_save = {
-                'best_threshold': float(best_thresh),
-                'val_best_f1': float(thresh_metrics['best_f1']),
-                'val_precision_at_best': float(thresh_metrics['precision_at_best']),
-                'val_recall_at_best': float(thresh_metrics['recall_at_best']),
-                'val_auc': float(val_metrics['auc']),
-                'val_aucpr': float(val_metrics['aucpr'])
-            }
-        else:
-            print(f"\nUsing existing threshold: {best_thresh:.3f}")
-            metrics_to_save = {'best_threshold': float(best_thresh)}
-        
-        # Evaluate on test set with optimal threshold
-        print(f"\nEvaluating test set with threshold={best_thresh:.3f}...")
-        test_metrics, test_embs, test_labels, test_probs, test_preds = evaluate(
-            embedding_net, probe, test_loader.dataset, device, best_thresh
-        )
-        
-        print(f"\n{'='*70}")
-        print("TEST RESULTS (with optimal threshold):")
-        print(f"{'='*70}")
-        print(f"Threshold:  {best_thresh:.3f}")
-        print(f"AUC:        {test_metrics['auc']:.4f}")
-        print(f"AUCPR:      {test_metrics['aucpr']:.4f}")
-        print(f"Accuracy:   {test_metrics['accuracy']:.4f}")
-        print(f"F1:         {test_metrics['f1']:.4f}")
-        print(f"{'='*70}")
-        
-        # Save test PR curve
-        pr_test_path = os.path.join(args.out_dir, 'figures', 'pr_curve_test.pdf')
-        save_pr_curve(test_labels, test_probs, pr_test_path)
-        
-        # Save test visualizations
-        save_roc_curve(test_labels, test_probs, os.path.join(args.out_dir, 'figures', 'roc_curve.pdf'))
-        save_confusion_matrix(test_labels, test_preds, os.path.join(args.out_dir, 'figures', 'confusion_matrix.pdf'))
-        
-        if len(test_embs) > 2000:
-            idx = np.random.choice(len(test_embs), 2000, replace=False)
-            plot_embeddings_umap(test_embs[idx], test_labels[idx], os.path.join(args.out_dir, 'figures', 'embeddings_umap.pdf'))
-        else:
-            plot_embeddings_umap(test_embs, test_labels, os.path.join(args.out_dir, 'figures', 'embeddings_umap.pdf'))
-        
-        # Update metrics with test results
-        metrics_to_save.update({
-            'test_auc': float(test_metrics['auc']),
-            'test_aucpr': float(test_metrics['aucpr']),
-            'test_accuracy': float(test_metrics['accuracy']),
-            'test_f1_at_best_thr': float(test_metrics['f1']),
-            'hyperparameters': vars(args)
-        })
-        
-        save_metrics_json(metrics_to_save, metrics_json_path)
-        print(f"\n✓ Eval-only complete! Results in {args.out_dir}\n")
-        return
-    
-    # Normal training path (epochs > 0)
+    # Load best and test
     if not os.path.exists(ckpt_path):
-        print(f"\nNo checkpoint found (epochs={args.epochs}). Skipping test evaluation.")
-        print(f"Run with --epochs > 0 to train and evaluate.")
+        print(f"\nNo checkpoint found. Skipping test evaluation.")
         return
     
     ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
     embedding_net.load_state_dict(ckpt['embedding_net'])
     probe.load_state_dict(ckpt['probe'])
-    best_thresh = ckpt.get('best_threshold', 0.5)  # Default to 0.5 if not found
+    best_thresh = ckpt.get('best_threshold', 0.5)
     
     print(f"\nTesting with threshold={best_thresh:.3f}...")
     test_metrics, test_embs, test_labels, test_probs, test_preds = evaluate(embedding_net, probe, test_loader.dataset, device, best_thresh)
@@ -472,7 +450,7 @@ def main():
         'test_f1_at_best_thr': float(test_metrics['f1']),
         'training_time_minutes': float((time.time() - start_time) / 60),
         'hyperparameters': vars(args)
-    }, os.path.join(args.out_dir, 'metrics.json'))
+    }, metrics_json_path)
     
     print(f"\n✓ Done! Results in {args.out_dir}\n")
 

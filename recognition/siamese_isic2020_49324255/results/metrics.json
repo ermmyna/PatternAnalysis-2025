@@ -1,0 +1,29 @@
+{
+    "best_epoch": 2,
+    "best_val_auc": 0.8248718999795039,
+    "best_threshold": 0.23,
+    "test_auc": 0.8370003819842344,
+    "test_aucpr": 0.1386208474424141,
+    "test_accuracy": 0.9523715803975595,
+    "test_f1_at_best_thr": 0.23417721518987342,
+    "training_time_minutes": 26.829058277606965,
+    "hyperparameters": {
+        "train_csv": "/content/PatternAnalysis-2025/data/train.csv",
+        "val_csv": "/content/PatternAnalysis-2025/data/val.csv",
+        "test_csv": "/content/PatternAnalysis-2025/data/test.csv",
+        "images_root": "/content/ISIC2020_224/train-image/image",
+        "out_dir": "/content/drive/MyDrive/COMP3710/siamese_runs/exp1_49324255",
+        "epochs": 15,
+        "batch_size": 48,
+        "img_size": 224,
+        "lr": 0.001,
+        "weight_decay": 0.0001,
+        "seed": 42,
+        "num_workers": 2,
+        "backbone": "efficientnet_b0",
+        "embed_dim": 128,
+        "margin": 1.0,
+        "unfreeze_after": 0,
+        "auto_threshold": false
+    }
+}

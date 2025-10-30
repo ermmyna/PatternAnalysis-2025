@@ -247,6 +247,33 @@ python recognition/siamese_isic2020_49324255/predict.py \
 
 **Interpretation:** The optimal threshold (0.23) is significantly lower than the default (0.5) due to severe class imbalance (1.7% malignant). This threshold balances precision and recall for the minority class, improving F1 from near-zero (at 0.5) to 0.234. ROC-AUC (0.837) demonstrates strong ranking ability, while AUCPR (0.139) more accurately reflects performance under extreme imbalance.
 
+### Visual Results
+
+#### ROC Curve
+![ROC Curve](results/figures/roc_curve.png)
+
+The ROC curve (AUC=0.837) shows strong discrimination across all threshold settings, with the curve well above the random baseline (diagonal). The smooth curve indicates stable probability calibration.
+
+#### Precision-Recall Curve
+![PR Curve](results/figures/pr_curve_test.png)
+
+The PR curve (AP=0.139) reflects the challenge of the 2.3% prevalence. The steep initial drop shows the difficulty maintaining precision as recall increases, typical of severe class imbalance scenarios.
+
+#### Confusion Matrix
+![Confusion Matrix](results/figures/confusion_matrix.png)
+
+At threshold=0.23: 37/116 true positives (31.9% sensitivity), 4,802/4,965 true negatives (96.7% specificity). The 79 false negatives indicate the model misses ~68% of melanomas, highlighting the need for ensemble approaches in clinical deployment.
+
+#### Learning Curves
+![Learning Curves](results/figures/learning_curves.png)
+
+Training converged smoothly with early stopping at epoch 6. Contrastive loss decreased steadily (0.23→0.19) while validation AUC peaked at epoch 2 (0.825). The gap between positive and negative pair distances increased from ~0.03 to ~0.19, indicating successful embedding space separation.
+
+#### Embedding Space (UMAP)
+![UMAP Embeddings](results/figures/embeddings_umap.png)
+
+UMAP projection of 128D embeddings shows clear separation between benign (blue) and malignant (red) clusters, with some overlap in boundary regions where visual similarity is high. This visualization confirms the Siamese network learned diagnostically meaningful features.
+
 ### Outputs
 
 **Figures:** `$OUT_DIR/figures/`
